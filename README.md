@@ -41,3 +41,5 @@ $ python
 >>> dump = True
 >>> tcc.execute(input_data, output_data, dump)
 ```
+
+_NOTE:_ You may need to set LD_LIRBRARY_PATH or copy the `libtcc.so.5` file to your working directory.
