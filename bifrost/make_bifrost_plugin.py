@@ -60,8 +60,8 @@ NVCC_GENCODE  ?= $(foreach arch, $(GPU_ARCHS_VALID), \
   -gencode arch=compute_$(GPU_ARCH_LATEST),"code=compute_$(GPU_ARCH_LATEST)"
 endif
 
-CXXFLAGS  += -std=c++11 -fPIC -fopenmp -I..
-NVCCFLAGS += -std=c++11 -I.. -Xcompiler "-fPIC" $(NVCC_GENCODE)
+CXXFLAGS  += -std=c++11 -fPIC -fopenmp -I../tensor-core-correlator
+NVCCFLAGS += -std=c++11 -I../tensor-core-correlator -Xcompiler "-fPIC" $(NVCC_GENCODE)
 
 #NVCCFLAGS += -Xcudafe "--diag_suppress=unrecognized_gcc_pragma"
 #NVCCFLAGS += --expt-relaxed-constexpr
