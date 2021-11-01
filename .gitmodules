@@ -1,0 +1,3 @@
+[submodule "tensor-core-correlator"]
+	path = tensor-core-correlator
+	url = https://git.astron.nl/RD/tensor-core-correlator.git
