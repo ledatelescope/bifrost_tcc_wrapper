@@ -5,10 +5,39 @@
 This provides a wrapper for Bifrost that allows the Tensor Core Correlator to be
 used within a Bifrost pipeline.
 
-To use:
+To build the wrapper:
 ```
 cd tensor-core-correlator
 make
 cd ../bifrost
 python make_bifrost_plugin.py [--bifrost-path=...]
+```
+
+To use the wrapper:
+```
+$ python
+>>> from bifrost import ndarray
+>>> from btcc import Btcc
+>>>
+>>> bits_per_sample = 8
+>>> ntime_per_gulp = 32
+>>> nchan = 128
+>>> nstand = 256
+>>> npol = 2
+>>>
+>>> tcc = Btcc()
+>>> tcc.init(bits_per_sample,
+...          ntime_per_gulp,
+...          nchan,
+...          nstand,
+...          npol)
+>>>
+>>> input_data = ndarray(shape=(ntime_per_gulp, nchan, nstand*npol),
+...                      dtype='ci8',
+...                      space='cuda')
+>>> output_data = ndarray(shape=(nchan, nstand*(nstand+1)//2*npol*npol),
+...                       dtype='ci32',
+...                       space='cuda')
+>>> dump = True
+>>> tcc.execute(input_data, output_data, dump)
 ```
