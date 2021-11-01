@@ -1,6 +1,6 @@
 # Bifrost Tensor Core Correlator Wrapper
 
-### [![Paper](https://img.shields.io/badge/A%26Ap-Romein%202021-blue.svg)](https://www.aanda.org/articles/aa/pdf/forth/aa41896-21.pdf)
+### [![Paper](https://img.shields.io/badge/A%26A-Romein%202021-blue.svg)](https://doi.org/10.1051/0004-6361/202141896)
 
 This provides a wrapper for Bifrost that allows the Tensor Core Correlator to be
 used within a Bifrost pipeline.
