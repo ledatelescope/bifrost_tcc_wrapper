@@ -168,9 +168,11 @@ def _extract_calls(filename, libname):
     functions = {}
     locations = {}
     for i,line in enumerate(wrapper):
-        if line.find('if not hasattr(_lib') != -1 or line.find('if hasattr(_lib') != -1:
+        if line.find('if not hasattr(_lib') != -1 or line.find('if hasattr(_lib') != -1 or line.find('if not _lib.has') != -1:
             function = line.split(None)[-1][1:]
-            function = function.replace("'):", '')
+            if line.find('if not _lib.has') != -1:
+                function = line.split('(')[-1].split(',')[0]
+            function = function.replace("'):", '').replace('"', '')
             py_name = function.split(_reverse_normalize_function_name(libname), 1)[-1]
             if py_name == '':
                 ## Catch for when the library name is the same as the function
