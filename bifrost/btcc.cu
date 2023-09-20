@@ -35,6 +35,9 @@
 #include <limits.h>
 #include <unistd.h>
 
+#if defined(BF_HAVE_CONFIG_H) && BF_HAVE_CONFIG_H
+#include <bifrost/config.h>
+#endif
 #include <bifrost/array.h>
 #include <bifrost/common.h>
 #include "utils.hpp"
