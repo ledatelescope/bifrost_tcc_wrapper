@@ -43,7 +43,7 @@ BIFROST_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # Makefile template
-_MAKEFILE_TEMPLATE = r"""
+_OLD_MAKEFILE_TEMPLATE = r"""
 include {bifrost_config}/config.mk {bifrost_config}/user.mk
 
 ifndef NOCUDA
@@ -120,6 +120,16 @@ LDFLAGS += -L{bifrost_library} -lbifrost -L. -ltcc
 
 GCCFLAGS += -fmessage-length=80 #-fdiagnostics-color=auto
 
+
+"""
+
+_MAKEFILE_TEMPLATE = """
+{preamble}
+
+CXXFLAGS  += -I{bifrost_include} -I. -I../tensor-core-correlator
+NVCCFLAGS += -I{bifrost_include} -I. -I../tensor-core-correlator -Xcompiler "-fPIC" $(NVCC_GENCODE)
+LDFLAGS += -L{bifrost_library} -lbifrost -L. -ltcc
+
 PYTHON_BINDINGS_FILE={libname}_generated.py
 PYTHON_WRAPPER_FILE={libname}.py
 
@@ -133,9 +143,9 @@ define run_ctypesgen
 	# WAR for a buggy WAR in ctypesgen that breaks type checking and auto-byref functionality
 	sed -i 's/def POINTER/def POINTER_not_used/' $@
 	# WAR for a buggy WAR in ctypesgen that breaks string buffer arguments (e.g., as in address.py)
-	sed -i 's/class String/String = c_char_p\nclass String_not_used/' $@
+	sed -i 's/class String/String = c_char_p\\nclass String_not_used/' $@
 	sed -i 's/String.from_param/String_not_used.from_param/g' $@
-	sed -i 's/def ReturnString/ReturnString = c_char_p\ndef ReturnString_not_used/' $@
+	sed -i 's/def ReturnString/ReturnString = c_char_p\\ndef ReturnString_not_used/' $@
 	sed -i '/errcheck = ReturnString/s/^/#/' $@
 endef
 
@@ -215,7 +225,44 @@ def create_makefile(libname, includes, bifrost_path=None):
         
     # Get the Bifrost paths
     bifrost_config, bifrost_include, bifrost_library, bifrost_script = resolve_bifrost(bifrost_path=bifrost_path)
-       
+    
+    # Sort out old vs. new Bifrost build system
+    if os.path.exists(os.path.join(bifrost_include, 'bifrost', 'config.h')):
+        preamble = ''
+        with open(os.path.join(bifrost_include, 'Makefile'), 'r') as ch:
+            in_block = 0
+            block = ''
+            dump_block = False
+            for line in ch:
+                if line.startswith('ifeq'):
+                    in_block += 1
+                if in_block:
+                    block += line
+                    if line.startswith('endif'):
+                        in_block -= 1
+                        
+                        if in_block == 0:
+                            if (block.find('GPU') != -1 or block.find('NVCC') != -1) \
+                                and block.find('CUFFT') == -1:
+                                preamble += block
+                            block = ''
+                            
+                elif line.startswith('include') and line.find('autodep') == -1:
+                    preamble += line.replace('../', bifrost_config+'/')
+                elif line.find('?=') != -1 and line.find('JIT') == -1 and line.find('WLFLAGS') == -1:
+                    preamble += line 
+                elif len(line) < 3:
+                    preamble += line
+        preamble = preamble.replace('-lcufft_static_pruned', '')
+    else:
+        preamble = _OLD_MAKEFILE_TEMPLATE.format(libname=libname,
+                                                 includes=includes,
+                                                 bifrost_config=bifrost_config,
+                                                 bifrost_include=bifrost_include,
+                                                 bifrost_library=bifrost_library,
+                                                 bifrost_script=bifrost_script,
+                                                 python=sys.executable)
+        
     # Fill the template, save it, and return the filename
     template = _MAKEFILE_TEMPLATE.format(libname=libname,
                                          includes=includes,
@@ -223,6 +270,7 @@ def create_makefile(libname, includes, bifrost_path=None):
                                          bifrost_include=bifrost_include,
                                          bifrost_library=bifrost_library,
                                          bifrost_script=bifrost_script,
+                                         preamble=preamble,
                                          python=sys.executable)
     filename = get_makefile_name(libname)
     with open(filename, 'w') as fh:
