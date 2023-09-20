@@ -215,11 +215,20 @@ private:
     void* _accum = NULL;
     cudaStream_t _stream;
     
+    cudaGraph_t _graph;
+    cudaGraphExec_t _gexec;
+    
 public:
-    btcc_impl() : _tcc(NULL), _reordered(NULL), _accum(NULL), _stream(g_cuda_stream) {}
+    btcc_impl() : _tcc(NULL), _reordered(NULL), _accum(NULL), _stream(g_cuda_stream), _graph(NULL), _gexec(NULL) {}
     ~btcc_impl() {
         cudaDeviceSynchronize();
         
+        if(_gexec) {
+          cudaGraphExecDestroy(_gexec);
+        }
+        if(_graph) {
+           cudaGraphDestroy(_graph);
+        }
         if(_tcc) {
            delete _tcc;
         }
@@ -276,33 +285,43 @@ public:
     void exec(BFarray const* in, BFarray* out, BFbool dump) {
         BF_ASSERT_EXCEPTION(_tcc, BF_STATUS_INVALID_STATE); 
         
+        if( _gexec ) {
+            cudaGraphLaunch(_gexec, _stream);
+        } else {
+            cudaStreamBeginCapture(_stream, cudaStreamCaptureMode::cudaStreamCaptureModeThreadLocal);
+            
 #define LAUNCH_SWIZZEL_KERNEL(DType) \
-        launch_swizzel_kernel(_ntime, _nchan, _nstand, _npol, _ntime_per_block, \
-                              (DType)in->data, (DType)_reordered, _stream)
-        
-        switch( in->dtype ) {
-            case BF_DTYPE_CI4:  LAUNCH_SWIZZEL_KERNEL(signed char*); break;
-            case BF_DTYPE_CI8:  LAUNCH_SWIZZEL_KERNEL(signed short*); break;
-            case BF_DTYPE_CF16: LAUNCH_SWIZZEL_KERNEL(__half*); break;
-            default: BF_ASSERT_EXCEPTION(false, BF_STATUS_UNSUPPORTED_DTYPE);
-        }
-        
+            launch_swizzel_kernel(_ntime, _nchan, _nstand, _npol, _ntime_per_block, \
+                                  (DType)in->data, (DType)_reordered, _stream)
+            
+            switch( in->dtype ) {
+                case BF_DTYPE_CI4:  LAUNCH_SWIZZEL_KERNEL(signed char*); break;
+                case BF_DTYPE_CI8:  LAUNCH_SWIZZEL_KERNEL(signed short*); break;
+                case BF_DTYPE_CF16: LAUNCH_SWIZZEL_KERNEL(__half*); break;
+                default: BF_ASSERT_EXCEPTION(false, BF_STATUS_UNSUPPORTED_DTYPE);
+            }
+            
 #undef LAUNCH_SWIZZEL_KERNEL
-        
-        (*_tcc).launchAsync((CUstream) _stream, (CUdeviceptr) out->data, (CUdeviceptr) _reordered);
-        BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_INTERNAL_ERROR);
-        
+            
+            (*_tcc).launchAsync((CUstream) _stream, (CUdeviceptr) out->data, (CUdeviceptr) _reordered);
+            BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_INTERNAL_ERROR);
+            
 #define LAUNCH_ACCUMULATE_KERNEL(DType) \
-        launch_accumulate_kernel(_nchan, _nstand, _npol*_npol, \
-                                 (DType)out->data, (DType)_accum, _stream)
-                              
-        switch( out->dtype ) {
-            case BF_DTYPE_CI32: LAUNCH_ACCUMULATE_KERNEL(int*); break;
-            case BF_DTYPE_CF32: LAUNCH_ACCUMULATE_KERNEL(float*); break;
-            default: BF_ASSERT_EXCEPTION(false, BF_STATUS_UNSUPPORTED_DTYPE);
-        }
-          
+            launch_accumulate_kernel(_nchan, _nstand, _npol*_npol, \
+                                     (DType)out->data, (DType)_accum, _stream)
+                                  
+            switch( out->dtype ) {
+                case BF_DTYPE_CI32: LAUNCH_ACCUMULATE_KERNEL(int*); break;
+                case BF_DTYPE_CF32: LAUNCH_ACCUMULATE_KERNEL(float*); break;
+                default: BF_ASSERT_EXCEPTION(false, BF_STATUS_UNSUPPORTED_DTYPE);
+            }
+            
 #undef LAUNCH_ACCUMULATE_KERNEL
+            
+            cudaStreamEndCapture(_stream, &_graph);
+            cudaGraphInstantiate(&_gexec, _graph, NULL, NULL, 0);
+            cudaGraphLaunch(_gexec, _stream);
+        }
         
         if(dump) {
           
