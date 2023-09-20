@@ -46,8 +46,8 @@ BIFROST_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MAKEFILE_TEMPLATE = """
 {preamble}
 
-CXXFLAGS  += -I{bifrost_include} -I. -I../tensor-core-correlator
-NVCCFLAGS += -I{bifrost_include} -I. -I../tensor-core-correlator -Xcompiler "-fPIC" $(NVCC_GENCODE)
+CXXFLAGS  += -I{bifrost_include} -I. -I../tensor-core-correlator -I../tensor-core-correlator/external/cuda-wrappers/include
+NVCCFLAGS += -I{bifrost_include} -I. -I../tensor-core-correlator -I../tensor-core-correlator/external/cuda-wrappers/include -Xcompiler "-fPIC" $(NVCC_GENCODE)
 LDFLAGS += -L{bifrost_library} -lbifrost -L. -ltcc
 
 PYTHON_BINDINGS_FILE={libname}_generated.py
