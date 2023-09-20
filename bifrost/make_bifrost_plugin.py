@@ -48,7 +48,7 @@ _MAKEFILE_TEMPLATE = """
 
 CXXFLAGS  += -I{bifrost_include} -I. -I../tensor-core-correlator -I../tensor-core-correlator/external/cuda-wrappers/include
 NVCCFLAGS += -I{bifrost_include} -I. -I../tensor-core-correlator -I../tensor-core-correlator/external/cuda-wrappers/include -Xcompiler "-fPIC" $(NVCC_GENCODE)
-LDFLAGS += -L{bifrost_library} -lbifrost -L. -ltcc
+LDFLAGS += -L{bifrost_library} -lbifrost -L. -ltcc -l:cudawrappers-cu.so -l:cudawrappers-nvrtc.so -l:cudawrappers-nvtx.so
 
 PYTHON_BINDINGS_FILE={libname}_generated.py
 PYTHON_WRAPPER_FILE={libname}.py
@@ -254,10 +254,11 @@ def main(args):
     # Get the name of the Makefile for this plugin
     makename = get_makefile_name(libname)
     
-    # Part 0:  Copy the TCC library over
-    if not os.path.exists('libtcc'):
-        os.mkdir('libtcc')
-    for filename in glob.glob('../tensor-core-correlator/libtcc/libtcc.so*'):
+    # Part 0:  Copy the TCC library (and the cuda wrappers) over
+    for filename in glob.glob('../tensor-core-correlator/build-*/libtcc/libtcc.so*'):
+        newname = os.path.basename(filename)
+        shutil.copy(filename, newname)
+    for filename in glob.glob('../tensor-core-correlator/external/cuda-wrappers/build-*/cudawrappers*.so'):
         newname = os.path.basename(filename)
         shutil.copy(filename, newname)
         
@@ -273,7 +274,7 @@ def main(args):
         sys.exit(status)
         
     # Part 3:  Clean up
-    #os.unlink(makename)
+    os.unlink(makename)
     objnames = glob.glob("%s*.o" % libname)
     for objname in objnames:
         os.unlink(objname)
