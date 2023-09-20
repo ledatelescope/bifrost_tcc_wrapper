@@ -288,7 +288,7 @@ public:
         if( _gexec ) {
             cudaGraphLaunch(_gexec, _stream);
         } else {
-            cudaStreamBeginCapture(_stream, cudaStreamCaptureMode::cudaStreamCaptureModeThreadLocal);
+            cudaStreamBeginCapture(_stream, cudaStreamCaptureModeThreadLocal);
             
 #define LAUNCH_SWIZZEL_KERNEL(DType) \
             launch_swizzel_kernel(_ntime, _nchan, _nstand, _npol, _ntime_per_block, \
