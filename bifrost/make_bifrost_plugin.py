@@ -43,82 +43,12 @@ BIFROST_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # Makefile template
-_MAKEFILE_TEMPLATE = r"""
-include {bifrost_config}/config.mk {bifrost_config}/user.mk
+_MAKEFILE_TEMPLATE = """
+{preamble}
 
-ifndef NOCUDA
-# All CUDA archs supported by this version of nvcc
-GPU_ARCHS_SUPPORTED := $(shell $(NVCC) -h | grep -Po "compute_[0-9]{{2}}" | cut -d_ -f2 | sort | uniq)
-# Intersection of user-specified archs and supported archs
-GPU_ARCHS_VALID     := $(shell echo $(GPU_ARCHS) $(GPU_ARCHS_SUPPORTED) | xargs -n1 | sort | uniq -d | xargs)
-# Latest valid arch
-GPU_ARCH_LATEST     := $(shell echo $(GPU_ARCHS_VALID) | rev | cut -d' ' -f1 | rev)
-
-# This creates SASS for all valid requested archs, and PTX for the latest one
-NVCC_GENCODE  ?= $(foreach arch, $(GPU_ARCHS_VALID), \
-  -gencode arch=compute_$(arch),"code=sm_$(arch)") \
-  -gencode arch=compute_$(GPU_ARCH_LATEST),"code=compute_$(GPU_ARCH_LATEST)"
-endif
-
-CXXFLAGS  += -std=c++11 -fPIC -fopenmp -I../tensor-core-correlator
-NVCCFLAGS += -std=c++11 -I../tensor-core-correlator -Xcompiler "-fPIC" $(NVCC_GENCODE)
-
-#NVCCFLAGS += -Xcudafe "--diag_suppress=unrecognized_gcc_pragma"
-#NVCCFLAGS += --expt-relaxed-constexpr
-
-ifndef NODEBUG
-  CPPFLAGS  += -DBF_DEBUG=1
-  CXXFLAGS  += -g
-  NVCCFLAGS += -g
-endif
-
-LIB += -lgomp
-
-ifdef TRACE
-  CPPFLAGS   += -DBF_TRACE_ENABLED=1
-endif
-
-ifdef NUMA
-  # Requires libnuma-dev to be installed
-  LIB        += -lnuma
-  CPPFLAGS   += -DBF_NUMA_ENABLED=1
-endif
-
-ifdef HWLOC
-  # Requires libhwloc-dev to be installed
-  LIB        += -lhwloc
-  CPPFLAGS   += -DBF_HWLOC_ENABLED=1
-endif
-
-ifdef VMA
-  # Requires Mellanox libvma to be installed
-  LIB        += -lvma
-  CPPFLAGS   += -DBF_VMA_ENABLED=1
-endif
-
-ifdef ALIGNMENT
-  CPPFLAGS   += -DBF_ALIGNMENT=$(ALIGNMENT)
-endif
-
-ifdef CUDA_DEBUG
-  NVCCFLAGS += -G
-endif
-
-ifndef NOCUDA
-  CPPFLAGS  += -DBF_CUDA_ENABLED=1
-  LDFLAGS   += -L$(CUDA_LIBDIR64) -L$(CUDA_LIBDIR) -lcuda -lcudart -lnvrtc -lcublas -lcudadevrt -L. -lculibos -lnvToolsExt
-endif
-
-ifndef ANY_ARCH
-  CXXFLAGS  += -march=native
-  NVCCFLAGS += -Xcompiler "-march=native"
-endif
-
-CPPFLAGS += -I{bifrost_include} -I. -I$(CUDA_INCDIR)
-
+CXXFLAGS  += -I{bifrost_include} -I. -I../tensor-core-correlator
+NVCCFLAGS += -I{bifrost_include} -I. -I../tensor-core-correlator -Xcompiler "-fPIC" $(NVCC_GENCODE)
 LDFLAGS += -L{bifrost_library} -lbifrost -L. -ltcc
-
-GCCFLAGS += -fmessage-length=80 #-fdiagnostics-color=auto
 
 PYTHON_BINDINGS_FILE={libname}_generated.py
 PYTHON_WRAPPER_FILE={libname}.py
@@ -133,9 +63,9 @@ define run_ctypesgen
 	# WAR for a buggy WAR in ctypesgen that breaks type checking and auto-byref functionality
 	sed -i 's/def POINTER/def POINTER_not_used/' $@
 	# WAR for a buggy WAR in ctypesgen that breaks string buffer arguments (e.g., as in address.py)
-	sed -i 's/class String/String = c_char_p\nclass String_not_used/' $@
+	sed -i 's/class String/String = c_char_p\\nclass String_not_used/' $@
 	sed -i 's/String.from_param/String_not_used.from_param/g' $@
-	sed -i 's/def ReturnString/ReturnString = c_char_p\ndef ReturnString_not_used/' $@
+	sed -i 's/def ReturnString/ReturnString = c_char_p\\ndef ReturnString_not_used/' $@
 	sed -i '/errcheck = ReturnString/s/^/#/' $@
 endef
 
@@ -215,7 +145,39 @@ def create_makefile(libname, includes, bifrost_path=None):
         
     # Get the Bifrost paths
     bifrost_config, bifrost_include, bifrost_library, bifrost_script = resolve_bifrost(bifrost_path=bifrost_path)
-       
+    
+    preamble = ''
+    with open(os.path.join(bifrost_include, 'Makefile'), 'r') as ch:
+        in_block = 0
+        block = ''
+        dump_block = False
+        for line in ch:
+            if line.startswith('ifeq') or line.startswith('ifdef') or line.startswith('ifndef'):
+                in_block += 1
+            if in_block:
+                block += line
+                if line.startswith('endif'):
+                    in_block -= 1
+                    
+                    if in_block == 0:
+                        if (block.find('GPU') != -1 or block.find('NVCC') != -1 or block.find('FLAGS') != -1) \
+                            and block.find('CUFFT') == -1:
+                            preamble += block
+                        block = ''
+                        
+            elif line.startswith('include') and line.find('autodep') == -1:
+                preamble += line.replace('../', bifrost_config+'/')
+            elif line.find('?=') != -1 and line.find('JIT') == -1 and line.find('WLFLAGS') == -1:
+                preamble += line 
+            elif len(line) < 3:
+                preamble += line
+    preamble = preamble.replace('-lcufft_static_pruned', '')
+    
+    # Sort out the old vs. new build system
+    if os.path.exists(os.path.join(bifrost_include, 'bifrost', 'config.h')):
+        preamble += 'CPPFLAGS += -DBF_HAVE_CONFIG_H=1\n'
+        preamble += 'NVCCFLAGS += -DBF_HAVE_CONFIG_H=1\n'
+        
     # Fill the template, save it, and return the filename
     template = _MAKEFILE_TEMPLATE.format(libname=libname,
                                          includes=includes,
@@ -223,6 +185,7 @@ def create_makefile(libname, includes, bifrost_path=None):
                                          bifrost_include=bifrost_include,
                                          bifrost_library=bifrost_library,
                                          bifrost_script=bifrost_script,
+                                         preamble=preamble,
                                          python=sys.executable)
     filename = get_makefile_name(libname)
     with open(filename, 'w') as fh:
@@ -310,7 +273,7 @@ def main(args):
         sys.exit(status)
         
     # Part 3:  Clean up
-    os.unlink(makename)
+    #os.unlink(makename)
     objnames = glob.glob("%s*.o" % libname)
     for objname in objnames:
         os.unlink(objname)
