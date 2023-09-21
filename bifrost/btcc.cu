@@ -176,7 +176,7 @@ __global__ void reorder_kernel(int          nchan,
             #pragma unroll
             for (pol2=0; pol2<npol; pol2++) {
                 size_t index = ((k*npol+pol1)*npol+pol2)*2;
-                size_t indexu = ((ku*npol+pol2)*npol+pol1)*2;
+                size_t indexu = ((ku*npol+pol1)*npol+pol2)*2;
                 out[indexu + 0] =  in[index + 0];
                 out[indexu + 1] = -in[index + 1];
             }
