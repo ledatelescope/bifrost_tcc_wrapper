@@ -70,7 +70,7 @@ define run_ctypesgen
 endef
 
 define run_wrapper
-	python {bifrost_script}/wrap_bifrost_plugin.py $1
+	{python} {bifrost_script}/wrap_bifrost_plugin.py $1
 endef
 
 lib{libname}.so: {libname}.o
