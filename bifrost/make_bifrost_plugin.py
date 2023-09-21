@@ -255,8 +255,6 @@ def main(args):
     makename = get_makefile_name(libname)
     
     # Part 0:  Copy the TCC library over
-    if not os.path.exists('libtcc'):
-        os.mkdir('libtcc')
     for filename in glob.glob('../tensor-core-correlator/libtcc/libtcc.so*'):
         newname = os.path.basename(filename)
         shutil.copy(filename, newname)
@@ -273,7 +271,7 @@ def main(args):
         sys.exit(status)
         
     # Part 3:  Clean up
-    #os.unlink(makename)
+    os.unlink(makename)
     objnames = glob.glob("%s*.o" % libname)
     for objname in objnames:
         os.unlink(objname)
