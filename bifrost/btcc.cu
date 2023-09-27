@@ -263,6 +263,7 @@ public:
         // Sanity checks
         BF_ASSERT_EXCEPTION((_nbits == 4) || (_nbits == 8) || (_nbits == 16), BF_STATUS_UNSUPPORTED_DTYPE);
         BF_ASSERT_EXCEPTION((_ntime*_decim) % _ntime_per_block == 0, BF_STATUS_UNSUPPORTED_SHAPE);
+        BF_ASSERT_EXCEPTION(_nchan % _decim == 0, BF_STATUS_INVALID_SHAPE);
         
         // Setup the tensor core correlator
         _tcc = new tcc::Correlator(_nbits, _nstand, _nchan/_decim, _ntime*_decim, _npol);
