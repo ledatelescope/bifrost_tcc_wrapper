@@ -1,7 +1,6 @@
 /*
- * Copyright (c) 2021, The Bifrost Authors. All rights reserved.
- # Copyright (c) 2021, The University of New Mexico. All rights reserved.
-
+ * Copyright (c) 2021-2023, The Bifrost Authors. All rights reserved.
+ * Copyright (c) 2021-2023, The University of New Mexico. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -211,6 +210,7 @@ private:
     int _nchan;
     int _nstand;
     int _npol;
+    int _decim;
     int _ntime_per_block;
     
     tcc::Correlator* _tcc;
@@ -246,29 +246,31 @@ public:
     inline int nchan() const { return _nchan; }
     inline int nstand() const { return _nstand; }
     inline int npol() const { return _npol; }
+    inline int decim() const { return _decim; }
     inline int ntime_per_block() const { return _ntime_per_block; }
     inline int nbaseline() const { return (_nstand+1)*(_nstand/2); }
     inline BFdtype in_dtype() const { return bf_dtype_from_tcc(_nbits); }
     inline BFdtype out_dtype() const { return _nbits == 16 ? BF_DTYPE_CF32 : BF_DTYPE_CI32; }
-    void init(int nbits, int ntime, int nchan, int nstand, int npol) {
+    void init(int nbits, int ntime, int nchan, int nstand, int npol, int decim=1) {
         _nbits = nbits;
         _ntime = ntime;
         _nchan = nchan;
         _nstand = nstand;
         _npol = npol;
+        _decim = decim;
         _ntime_per_block = 128 / _nbits;
         
         // Sanity checks
         BF_ASSERT_EXCEPTION((_nbits == 4) || (_nbits == 8) || (_nbits == 16), BF_STATUS_UNSUPPORTED_DTYPE);
-        BF_ASSERT_EXCEPTION(_ntime % _ntime_per_block == 0, BF_STATUS_UNSUPPORTED_SHAPE);
+        BF_ASSERT_EXCEPTION((_ntime*_decim) % _ntime_per_block == 0, BF_STATUS_UNSUPPORTED_SHAPE);
         
         // Setup the tensor core correlator
-        _tcc = new tcc::Correlator(_nbits, _nstand, _nchan, _ntime, _npol);
+        _tcc = new tcc::Correlator(_nbits, _nstand, _nchan/_decim, _ntime*_decim, _npol);
         
         // Temporary storage for reordered input data and accumulation
         cudaMalloc(&_reordered, _ntime*_nchan*_nstand*_npol*_nbits*2);
         BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_MEM_ALLOC_FAILED);
-        cudaMalloc(&_accum, _nchan*(_nstand+1)*(_nstand/2)*_npol*_npol*2*sizeof(float));
+        cudaMalloc(&_accum, (_nchan/_decim)*(_nstand+1)*(_nstand/2)*_npol*_npol*2*sizeof(float));
         BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_MEM_ALLOC_FAILED);
         
         // Zero out the accumulator
@@ -282,7 +284,7 @@ public:
     void reset_state() {
         BF_ASSERT_EXCEPTION(_tcc, BF_STATUS_INVALID_STATE); 
         
-        cudaMemset(_accum, 0, _nchan*_nstand*(_nstand+1)/2*_npol*_npol*2*sizeof(float));
+        cudaMemset(_accum, 0, (_nchan/_decim)*_nstand*(_nstand+1)/2*_npol*_npol*2*sizeof(float));
         BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_MEM_OP_FAILED);
     }
     void exec(BFarray const* in, BFarray* out, BFbool dump) {
@@ -310,7 +312,7 @@ public:
             BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_INTERNAL_ERROR);
             
 #define LAUNCH_ACCUMULATE_KERNEL(DType) \
-            launch_accumulate_kernel(_nchan, _nstand, _npol*_npol, \
+            launch_accumulate_kernel(_nchan/_decim, _nstand, _npol*_npol, \
                                      (DType)out->data, (DType)_accum, _stream)
                                   
             switch( out->dtype ) {
@@ -329,7 +331,7 @@ public:
         if(dump) {
           
 #define LAUNCH_REORDER_KERNEL(DType) \
-          launch_reorder_kernel(_nchan, _nstand, _npol, \
+          launch_reorder_kernel(_nchan/_decim, _nstand, _npol, \
                                 (DType)_accum, (DType)out->data, _stream)
           
           switch( out->dtype ) {
@@ -356,9 +358,10 @@ BFstatus BTccInit(btcc  plan,
                   int   ntime,
                   int   nchan,
                   int   nstand,
-                  int   npol) {
+                  int   npol,
+                  int   decim) {
     BF_ASSERT(plan, BF_STATUS_INVALID_HANDLE);
-    BF_TRY_RETURN(plan->init(nbits, ntime, nchan, nstand, npol));
+    BF_TRY_RETURN(plan->init(nbits, ntime, nchan, nstand, npol, decim));
 }
 
 BFstatus BTccSetStream(btcc        plan,
@@ -387,7 +390,7 @@ BFstatus BTccExecute(btcc           plan,
     BF_ASSERT(in->shape[2] == plan->nstand()*plan->npol(), BF_STATUS_INVALID_SHAPE);
     
     BF_ASSERT(out->ndim == 2, BF_STATUS_INVALID_SHAPE);
-    BF_ASSERT(out->shape[0] == plan->nchan(), BF_STATUS_INVALID_SHAPE);
+    BF_ASSERT(out->shape[0] == plan->nchan()/plan->decim(), BF_STATUS_INVALID_SHAPE);
     BF_ASSERT(out->shape[1] == plan->nbaseline()*plan->npol()*plan->npol(), BF_STATUS_INVALID_SHAPE);
     
     BF_ASSERT(in->dtype == plan->in_dtype(), BF_STATUS_UNSUPPORTED_DTYPE);
