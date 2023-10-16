@@ -51,6 +51,11 @@ class tcc_tests(unittest.TestCase):
             _, nchan, nstandpol = idata.shape
             nstand = nstandpol // npol
             
+        if decim > 1:
+            idata = idata.reshape(-1, nchan//decim, decim, nstand*npol)
+            idata = idata.sum(axis=2)
+            nchan //= decim
+            
         odata = np.zeros((nchan,nstand*(nstand+1)//2*npol*npol), dtype=np.complex64)
         for c in range(nchan):
             k = 0
@@ -61,10 +66,6 @@ class tcc_tests(unittest.TestCase):
                             odata[c,npol*npol*k+npol*p0+p1] = (idata[:,c,npol*i+p0]*idata[:,c,npol*j+p1].conj()).sum()
                     k += 1
                     
-        if decim > 1:
-            odata = odata.reshape(nchan//decim,decim,-1)
-            odata = odata.sum(axis=1)
-            
         return odata
         
     
@@ -81,6 +82,9 @@ class tcc_tests(unittest.TestCase):
             dtype = 'ci8'
         else:
             dtype = 'cf16'
+            
+        if nbit == 8:
+            data /= 16
         
         data = ndarray(data, space='system')
         qdata = ndarray(shape=data.shape, dtype=dtype, space='system')
@@ -119,7 +123,9 @@ class tcc_tests(unittest.TestCase):
         self.run_test(nbit=4, naccum=3)
         
     def test_tcc_ci4_decim_accum(self):
-        self.run_test(nbit=4, decim=4, naccum=3)
+        for nstand in (16, 32, 64):
+            with self.subTest(nstand=nstand):
+                self.run_test(nbit=4, nstand=nstand, decim=4, naccum=3)
         
     def test_tcc_ci8(self):
         self.run_test(nbit=8)
@@ -131,7 +137,9 @@ class tcc_tests(unittest.TestCase):
         self.run_test(nbit=8, naccum=3)
         
     def test_tcc_ci8_decim_accum(self):
-        self.run_test(nbit=8, decim=4, naccum=3)
+        for nstand in (16, 32, 64):
+            with self.subTest(nstand=nstand):
+                self.run_test(nbit=8, nstand=nstand, decim=4, naccum=3)
         
 
 
