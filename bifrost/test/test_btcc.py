@@ -69,7 +69,6 @@ class tcc_tests(unittest.TestCase):
                     
         return odata
         
-    
     @staticmethod
     def create_data(nbit=8, ntime=64, nchan=32, nstand=16, npol=2):
         data = np.random.rand(ntime,nchan,nstand,npol) \
