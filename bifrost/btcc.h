@@ -1,7 +1,6 @@
 /*
- * Copyright (c) 2021, The Bifrost Authors. All rights reserved.
- # Copyright (c) 2021, The University of New Mexico. All rights reserved.
-
+ * Copyright (c) 2021-2023, The Bifrost Authors. All rights reserved.
+ * Copyright (c) 2021-2023, The University of New Mexico. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -43,7 +42,8 @@ BFstatus BTccInit(btcc  plan,
                   int   ntime,
                   int   nchan,
                   int   nstand,
-                  int   npol);
+                  int   npol,
+                  int   decim);
 BFstatus BTccSetStream(btcc        plan,
                        void const* stream);
 BFstatus BTccResetState(btcc plan);

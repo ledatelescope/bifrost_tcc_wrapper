@@ -1,7 +1,6 @@
 /*
- * Copyright (c) 2021, The Bifrost Authors. All rights reserved.
- # Copyright (c) 2021, The University of New Mexico. All rights reserved.
-
+ * Copyright (c) 2021-2023, The Bifrost Authors. All rights reserved.
+ * Copyright (c) 2021-2023, The University of New Mexico. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -49,6 +48,7 @@
 #include <cuda_fp16.h>
 
 #include "btcc.h"
+#include "Complex.hpp"
 
 #include "libtcc/Correlator.h"
 
@@ -66,74 +66,105 @@ inline BFdtype bf_dtype_from_tcc(int nr_bits) {
     }
 }
 
-template<typename DType>
+struct __attribute__((aligned(1))) nibble2 {
+    // Yikes!  This is dicey since the packing order is implementation dependent!
+    signed char y:4, x:4;
+};
+
+struct __attribute__((aligned(1))) blenib2 {
+    // Yikes!  This is dicey since the packing order is implementation dependent!
+    signed char x:4, y:4;
+};
+
+template<typename IType,typename OType,uint8_t NPol>
 __global__ void swizzel_kernel(int          ntime,
                                int          nchan,
                                int          nstand,
-                               int          npol,
                                int          ntime_per_block,
-                               const DType* in,
-                               DType*       out) {
-    int t, f, s, p;
+                               int          ndecim,
+                               const IType* in,
+                               OType*       out) {
+    int t, f, s, p, d;
     t = blockIdx.x;
     f = blockIdx.y;
     s = threadIdx.x;
+    p = threadIdx.y;
     
     int t0, t1;
     t0 = t / ntime_per_block;
     t1 = t % ntime_per_block;
     
-    int in_idx = t*nchan*nstand*npol + f*nstand*npol + s*npol;
-    int out_idx = f*ntime*nstand*npol + t0*nstand*npol*ntime_per_block \
-                  + s*npol*ntime_per_block;
+    int in_idx = t*nchan*nstand*NPol + ndecim*f*nstand*NPol + s*NPol;
+    int out_idx = f*ntime*nstand*NPol + t0*nstand*NPol*ntime_per_block \
+                  + s*NPol*ntime_per_block;
+    IType temp;
+    OType sum[NPol];
     #pragma unroll
-    for(p=0; p<npol; p++) {
-        out[out_idx + p*ntime_per_block + t1] = in[in_idx + p];
+    for(p=0; p<NPol; p++) {
+        sum[p] = OType(0, 0);
+    }
+    
+    for(d=0; d<ndecim; d++) {
+        #pragma unroll
+        for(p=0; p<NPol; p++) {
+            temp = in[in_idx + p];
+            sum[p] += OType(temp.x, temp.y);
+        }
+        in_idx += nstand*NPol;
+    }
+    
+    #pragma unroll
+    for(p=0; p<NPol; p++) {
+        out[out_idx + p*ntime_per_block + t1] = sum[p];
     }
 }
 
-template<typename DType>
+template<typename IType, typename OType>
 inline void launch_swizzel_kernel(int          ntime,
                                   int          nchan, 
                                   int          nstand, 
                                   int          npol,
                                   int          ntime_per_block,
-                                  DType*       d_in,
-                                  DType*       d_out,
+                                  int          ndecim,
+                                  IType*       d_in,
+                                  OType*       d_out,
                                   cudaStream_t stream=0) {
     dim3 block(nstand, 1);
-    dim3 grid(ntime, nchan, 1);
+    dim3 grid(ntime, nchan/ndecim, 1);
     void* args[] = {&ntime,
                     &nchan,
                     &nstand,
-                    &npol,
                     &ntime_per_block,
+                    &ndecim,
                     &d_in,
                     &d_out};
-    BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)swizzel_kernel<DType>,
-                                             grid, block,
-                                             &args[0], 0, stream),
-                            BF_STATUS_INTERNAL_ERROR);
+    if( npol == 2 ) {
+        BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)swizzel_kernel<IType,OType,2>,
+                                                 grid, block,
+                                                 &args[0], 0, stream),
+                                BF_STATUS_INTERNAL_ERROR);
+    } else {
+         BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)swizzel_kernel<IType,OType,1>,
+                                                 grid, block,
+                                                 &args[0], 0, stream),
+                                BF_STATUS_INTERNAL_ERROR);
+    }
 }
 
-template<typename DType>
+template<typename DType, uint8_t NPol>
 __global__ void accumulate_kernel(int          nchan,
                                   int          nstand,
-                                  int          npolprod,
                                   const DType* in,
                                   DType*       out) {
-    int f, s, p, c;
-    f = blockIdx.x;
-    s = threadIdx.x;
+    int f, b, p;
+    f = blockIdx.y;
+    b = blockIdx.x*blockDim.x + threadIdx.x;
     
-    int b = f*(nstand+1)*(nstand/2) + s*(2*(nstand-1)+1-s)/2 + s;
-    for(int i=b; i<b+nstand-s; i++) {
+    if( b < (nstand+1)*nstand/2 ) {
+        b += f*(nstand+1)*nstand/2;
         #pragma unroll
-        for(p=0; p<npolprod; p++) {
-            #pragma unroll
-            for(c=0; c<2; c++) {
-                out[i*npolprod*2 + p*2 + c] += in[i*npolprod*2 + p*2 + c];
-            }
+        for (p=0; p<NPol*NPol; p++) {
+            out[b*NPol*NPol + p] += in[b*NPol*NPol + p];
         }
     }
 }
@@ -141,30 +172,35 @@ __global__ void accumulate_kernel(int          nchan,
 template<typename DType>
 inline void launch_accumulate_kernel(int          nchan, 
                                      int          nstand, 
-                                     int          npolprod,
+                                     int          npol,
                                      DType*       d_in,
                                      DType*       d_out,
                                      cudaStream_t stream=0) {
-    dim3 block(nstand, 1);
-    dim3 grid(nchan, 1, 1);
+    dim3 block(256, 1);
+    dim3 grid((nstand+1)*nstand/512+1, nchan, 1);
     void* args[] = {&nchan,
                     &nstand,
-                    &npolprod,
                     &d_in,
                     &d_out};
-    BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)accumulate_kernel<DType>,
-                                             grid, block,
-                                             &args[0], 0, stream),
-                            BF_STATUS_INTERNAL_ERROR);
+    if( npol == 2 ) {
+        BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)accumulate_kernel<DType,2>,
+                                                 grid, block,
+                                                 &args[0], 0, stream),
+                                BF_STATUS_INTERNAL_ERROR);
+    } else {
+        BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)accumulate_kernel<DType,1>,
+                                                 grid, block,
+                                                 &args[0], 0, stream),
+                                BF_STATUS_INTERNAL_ERROR);
+    }
 }
 
-template<typename DType>
+template<typename DType, uint8_t NPol>
 __global__ void reorder_kernel(int          nchan,
                                int          nstand,
-                               int          npol,
                                const DType* in,
                                DType*       out) {
-    int f, i, j, pol1, pol2;
+    int f, i, j, p;
     f = blockIdx.x;
     j = threadIdx.x;
 
@@ -172,14 +208,8 @@ __global__ void reorder_kernel(int          nchan,
         int k = f*(nstand+1)*(nstand/2) + j*(j+1)/2 + i;
         int ku = f*(nstand+1)*(nstand/2) + i*(2*(nstand-1)+1-i)/2 + j;
         #pragma unroll
-        for (pol1=0; pol1<npol; pol1++) {
-            #pragma unroll
-            for (pol2=0; pol2<npol; pol2++) {
-                size_t index = ((k*npol+pol1)*npol+pol2)*2;
-                size_t indexu = ((ku*npol+pol1)*npol+pol2)*2;
-                out[indexu + 0] =  in[index + 0];
-                out[indexu + 1] = -in[index + 1];
-            }
+        for (p=0; p<NPol*NPol; p++) {
+            out[ku*NPol*NPol + p] =  in[k*NPol*NPol + p].conj();
         }
     }
 }
@@ -195,23 +225,31 @@ inline void launch_reorder_kernel(int          nchan,
     dim3 grid(nchan, 1, 1);
     void* args[] = {&nchan,
                     &nstand,
-                    &npol,
                     &d_in,
                     &d_out};
-    BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)reorder_kernel<DType>,
-                                             grid, block,
-                                             &args[0], 0, stream),
-                            BF_STATUS_INTERNAL_ERROR);
+    if( npol == 2 ) {
+        BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)reorder_kernel<DType,2>,
+                                                 grid, block,
+                                                 &args[0], 0, stream),
+                                BF_STATUS_INTERNAL_ERROR);
+    } else {
+        BF_CHECK_CUDA_EXCEPTION(cudaLaunchKernel((void*)reorder_kernel<DType,1>,
+                                                 grid, block,
+                                                 &args[0], 0, stream),
+                                BF_STATUS_INTERNAL_ERROR);
+    }
 }
 
 class btcc_impl {
 private:
-    int _nbits;
-    int _ntime;
-    int _nchan;
-    int _nstand;
-    int _npol;
-    int _ntime_per_block;
+    int  _nbits;
+    int  _ntime;
+    int  _nchan;
+    int  _nstand;
+    int  _npol;
+    int  _decim;
+    int  _ntime_per_block;
+    bool _is_upconversion;
     
     tcc::Correlator* _tcc;
     void* _reordered = NULL;
@@ -246,29 +284,41 @@ public:
     inline int nchan() const { return _nchan; }
     inline int nstand() const { return _nstand; }
     inline int npol() const { return _npol; }
+    inline int decim() const { return _decim; }
     inline int ntime_per_block() const { return _ntime_per_block; }
+    inline bool is_upconversion() const { return _is_upconversion; }
     inline int nbaseline() const { return (_nstand+1)*(_nstand/2); }
     inline BFdtype in_dtype() const { return bf_dtype_from_tcc(_nbits); }
     inline BFdtype out_dtype() const { return _nbits == 16 ? BF_DTYPE_CF32 : BF_DTYPE_CI32; }
-    void init(int nbits, int ntime, int nchan, int nstand, int npol) {
+    void init(int nbits, int ntime, int nchan, int nstand, int npol, int decim=1) {
         _nbits = nbits;
         _ntime = ntime;
         _nchan = nchan;
         _nstand = nstand;
         _npol = npol;
+        _decim = decim;
         _ntime_per_block = 128 / _nbits;
+        _is_upconversion = false;
         
         // Sanity checks
         BF_ASSERT_EXCEPTION((_nbits == 4) || (_nbits == 8) || (_nbits == 16), BF_STATUS_UNSUPPORTED_DTYPE);
         BF_ASSERT_EXCEPTION(_ntime % _ntime_per_block == 0, BF_STATUS_UNSUPPORTED_SHAPE);
+        BF_ASSERT_EXCEPTION(_nchan % _decim == 0, BF_STATUS_INVALID_SHAPE);
+        
+        // Catch ci4 decimation
+        if( _nbits == 4 && _decim > 1 ) {
+          _nbits = 8;
+          _ntime_per_block = 128 / _nbits;
+          _is_upconversion = true;
+        }
         
         // Setup the tensor core correlator
-        _tcc = new tcc::Correlator(_nbits, _nstand, _nchan, _ntime, _npol);
+        _tcc = new tcc::Correlator(_nbits, _nstand, _nchan/_decim, _ntime, _npol);
         
         // Temporary storage for reordered input data and accumulation
-        cudaMalloc(&_reordered, _ntime*_nchan*_nstand*_npol*_nbits*2);
+        cudaMalloc(&_reordered, _ntime*(_nchan/_decim)*_nstand*_npol*_nbits*2);
         BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_MEM_ALLOC_FAILED);
-        cudaMalloc(&_accum, _nchan*(_nstand+1)*(_nstand/2)*_npol*_npol*2*sizeof(float));
+        cudaMalloc(&_accum, (_nchan/_decim)*(_nstand+1)*(_nstand/2)*_npol*_npol*2*sizeof(float));
         BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_MEM_ALLOC_FAILED);
         
         // Zero out the accumulator
@@ -282,7 +332,7 @@ public:
     void reset_state() {
         BF_ASSERT_EXCEPTION(_tcc, BF_STATUS_INVALID_STATE); 
         
-        cudaMemset(_accum, 0, _nchan*_nstand*(_nstand+1)/2*_npol*_npol*2*sizeof(float));
+        cudaMemset(_accum, 0, (_nchan/_decim)*_nstand*(_nstand+1)/2*_npol*_npol*sizeof(Complex<float>));
         BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_MEM_OP_FAILED);
     }
     void exec(BFarray const* in, BFarray* out, BFbool dump) {
@@ -293,14 +343,20 @@ public:
         } else {
             cudaStreamBeginCapture(_stream, cudaStreamCaptureModeThreadLocal);
             
-#define LAUNCH_SWIZZEL_KERNEL(DType) \
-            launch_swizzel_kernel(_ntime, _nchan, _nstand, _npol, _ntime_per_block, \
-                                  (DType)in->data, (DType)_reordered, _stream)
+#define LAUNCH_SWIZZEL_KERNEL(IType,OType) \
+            launch_swizzel_kernel(_ntime, _nchan, _nstand, _npol, _ntime_per_block, _decim, \
+                                  (IType)in->data, (OType)_reordered, _stream)
             
             switch( in->dtype ) {
-                case BF_DTYPE_CI4:  LAUNCH_SWIZZEL_KERNEL(signed char*); break;
-                case BF_DTYPE_CI8:  LAUNCH_SWIZZEL_KERNEL(signed short*); break;
-                case BF_DTYPE_CF16: LAUNCH_SWIZZEL_KERNEL(__half*); break;
+                case BF_DTYPE_CI4:
+                    if( in->big_endian ) {
+                        LAUNCH_SWIZZEL_KERNEL(nibble2*,Complex<int8_t>*);
+                    } else {
+                        LAUNCH_SWIZZEL_KERNEL(blenib2*,Complex<int8_t>*);
+                    }
+                    break;
+                case BF_DTYPE_CI8:  LAUNCH_SWIZZEL_KERNEL(char2*,Complex<int8_t>*); break;
+                case BF_DTYPE_CF16: LAUNCH_SWIZZEL_KERNEL(__half2*,Complex<__half>*); break;
                 default: BF_ASSERT_EXCEPTION(false, BF_STATUS_UNSUPPORTED_DTYPE);
             }
             
@@ -310,12 +366,12 @@ public:
             BF_CHECK_CUDA_EXCEPTION(cudaGetLastError(), BF_STATUS_INTERNAL_ERROR);
             
 #define LAUNCH_ACCUMULATE_KERNEL(DType) \
-            launch_accumulate_kernel(_nchan, _nstand, _npol*_npol, \
+            launch_accumulate_kernel(_nchan/_decim, _nstand, _npol, \
                                      (DType)out->data, (DType)_accum, _stream)
                                   
             switch( out->dtype ) {
-                case BF_DTYPE_CI32: LAUNCH_ACCUMULATE_KERNEL(int*); break;
-                case BF_DTYPE_CF32: LAUNCH_ACCUMULATE_KERNEL(float*); break;
+                case BF_DTYPE_CI32: LAUNCH_ACCUMULATE_KERNEL(Complex<int>*); break;
+                case BF_DTYPE_CF32: LAUNCH_ACCUMULATE_KERNEL(Complex<float>*); break;
                 default: BF_ASSERT_EXCEPTION(false, BF_STATUS_UNSUPPORTED_DTYPE);
             }
             
@@ -329,12 +385,12 @@ public:
         if(dump) {
           
 #define LAUNCH_REORDER_KERNEL(DType) \
-          launch_reorder_kernel(_nchan, _nstand, _npol, \
+          launch_reorder_kernel(_nchan/_decim, _nstand, _npol, \
                                 (DType)_accum, (DType)out->data, _stream)
           
           switch( out->dtype ) {
-              case BF_DTYPE_CI32: LAUNCH_REORDER_KERNEL(int*); break;
-              case BF_DTYPE_CF32: LAUNCH_REORDER_KERNEL(float*); break;
+              case BF_DTYPE_CI32: LAUNCH_REORDER_KERNEL(Complex<int>*); break;
+              case BF_DTYPE_CF32: LAUNCH_REORDER_KERNEL(Complex<float>*); break;
               default: BF_ASSERT_EXCEPTION(false, BF_STATUS_UNSUPPORTED_DTYPE);
           }
             
@@ -356,9 +412,10 @@ BFstatus BTccInit(btcc  plan,
                   int   ntime,
                   int   nchan,
                   int   nstand,
-                  int   npol) {
+                  int   npol,
+                  int   decim) {
     BF_ASSERT(plan, BF_STATUS_INVALID_HANDLE);
-    BF_TRY_RETURN(plan->init(nbits, ntime, nchan, nstand, npol));
+    BF_TRY_RETURN(plan->init(nbits, ntime, nchan, nstand, npol, decim));
 }
 
 BFstatus BTccSetStream(btcc        plan,
@@ -387,10 +444,14 @@ BFstatus BTccExecute(btcc           plan,
     BF_ASSERT(in->shape[2] == plan->nstand()*plan->npol(), BF_STATUS_INVALID_SHAPE);
     
     BF_ASSERT(out->ndim == 2, BF_STATUS_INVALID_SHAPE);
-    BF_ASSERT(out->shape[0] == plan->nchan(), BF_STATUS_INVALID_SHAPE);
+    BF_ASSERT(out->shape[0] == plan->nchan()/plan->decim(), BF_STATUS_INVALID_SHAPE);
     BF_ASSERT(out->shape[1] == plan->nbaseline()*plan->npol()*plan->npol(), BF_STATUS_INVALID_SHAPE);
     
-    BF_ASSERT(in->dtype == plan->in_dtype(), BF_STATUS_UNSUPPORTED_DTYPE);
+    if( plan->is_upconversion() ) {
+      BF_ASSERT(in->dtype == BF_DTYPE_CI4, BF_STATUS_UNSUPPORTED_DTYPE);
+    } else {
+      BF_ASSERT(in->dtype == plan->in_dtype(), BF_STATUS_UNSUPPORTED_DTYPE);
+    }
     BF_ASSERT(out->dtype == plan->out_dtype(), BF_STATUS_UNSUPPORTED_DTYPE);
     
     BF_ASSERT(space_accessible_from(in->space, BF_SPACE_CUDA),
