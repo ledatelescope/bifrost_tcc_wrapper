@@ -60,10 +60,11 @@ class tcc_tests(unittest.TestCase):
         for c in range(nchan):
             k = 0
             for i in range(nstand):
+                tic = idata[:,c,:].real - 1j*idata[:,c,:].imag  # Manually conjugate the first signal
                 for j in range(i, nstand):
                     for p0 in range(npol):
                         for p1 in range(npol):
-                            odata[c,npol*npol*k+npol*p0+p1] = (idata[:,c,npol*i+p0]*idata[:,c,npol*j+p1].conj()).sum()
+                            odata[c,npol*npol*k+npol*p0+p1] += (tic[:,npol*i+p0]*idata[:,c,npol*j+p1]).sum()
                     k += 1
                     
         return odata
@@ -72,7 +73,8 @@ class tcc_tests(unittest.TestCase):
     @staticmethod
     def create_data(nbit=8, ntime=64, nchan=32, nstand=16, npol=2):
         data = np.random.rand(ntime,nchan,nstand,npol) \
-               + np.random.rand(ntime,nchan,nstand,npol)
+               + 1j*np.random.rand(ntime,nchan,nstand,npol)
+        data -= 0.5 + 0.5j
         data *= 2**(nbit-1)-1
         data = data.astype(np.complex64)
         
@@ -87,7 +89,7 @@ class tcc_tests(unittest.TestCase):
             data /= 16
         
         data = ndarray(data, space='system')
-        qdata = ndarray(shape=data.shape, dtype=dtype, space='system')
+        qdata = ndarray(shape=data.shape, dtype=dtype, native=False, space='system')
         quantize(data, qdata, scale=1.0)
         return qdata.copy(space='cuda')
         
@@ -126,7 +128,7 @@ class tcc_tests(unittest.TestCase):
         for nstand in (16, 32, 64):
             with self.subTest(nstand=nstand):
                 self.run_test(nbit=4, nstand=nstand, decim=4, naccum=3)
-        
+                
     def test_tcc_ci8(self):
         self.run_test(nbit=8)
         
